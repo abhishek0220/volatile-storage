@@ -1,50 +1,47 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
 import uuid
-import os
-import json
+import aioredis
+from fastapi import FastAPI, Request
+from models import DataBlock, CreateResponse, GetFileResponse
+from constants import SERVER_LINK, REDIS_HOST, REDIS_PORT, REDIS_DB
 
-ROOT_STORE_PATH = os.path.join(os.getcwd(), 'tem')
-SERVER_LINK = "https://storage.abhis.me"
+redis: aioredis.Redis = aioredis.from_url(
+    f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+)
 
 app = FastAPI()
 
-class DataBlock(BaseModel):
-    data: str
-
-class CreateResponse(BaseModel):
-    link: str = SERVER_LINK+"/file/<UID>"
-
-class GetFileResponse(BaseModel):
-    status: str = "OK"
-    file: DataBlock
 
 @app.get("/")
-async def read_root():
-    return {"Hello": "World"}
+async def read_root(request: Request):
+    total_creations = await redis.get("total_creations") or 0
+    return {"Hello": "World", "total_creations": total_creations}
+
 
 @app.post("/create", response_model=CreateResponse)
 async def create_data(data_obj: DataBlock):
-    file_name = str(uuid.uuid4()) + ".json"
-    file_loc = os.path.join(ROOT_STORE_PATH, file_name)
+    file_id = ''.join(str(uuid.uuid4()).split("-"))
 
-    json_object = json.dumps(data_obj.dict(), indent = 4)
-  
-    with open(file_loc, "w") as outfile:
-        outfile.write(json_object)
+    await redis.set(file_id, data_obj.data, 3600)
+    await redis.incr("total_creations")
 
-    return {"link": SERVER_LINK+"/file/"+ file_name}
+    resp = CreateResponse(link=SERVER_LINK+"/file/"+file_id)
+    return resp
 
 
 @app.get('/file/{file_id}', response_model=GetFileResponse)
 async def get_file(file_id: str):
-    file_loc = os.path.join(ROOT_STORE_PATH, file_id)
-    resp = {}
-    try:
-        with open(file_loc, "r") as openfile:
-            json_object = json.load(openfile)
-    except:
-        resp['status'] = "NOT_OK"
-    else:
-        resp['file'] = json_object
+    file_cont = await redis.get(file_id)
+    rem = await redis.ttl(file_id)
+    resp = GetFileResponse(status="NOT_OK")
+    if file_cont:
+        resp.status = "OK"
+        resp.file = DataBlock(data=file_cont.decode())
+        resp.remaining_time = rem
+
     return resp
+
+
+@app.delete('/file/{file_id}')
+async def delete_file(file_id: str):
+    await redis.delete(file_id)
+    return {"status": "OK"}
