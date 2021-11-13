@@ -21,7 +21,7 @@ async def read_root(request: Request):
 async def create_data(data_obj: DataBlock):
     file_id = ''.join(str(uuid.uuid4()).split("-"))
 
-    await redis.set(file_id, data_obj.data, 3600)
+    await redis.set(file_id, data_obj.data, 36000)
     await redis.incr("total_creations")
 
     resp = CreateResponse(link=SERVER_LINK+"/file/"+file_id)
